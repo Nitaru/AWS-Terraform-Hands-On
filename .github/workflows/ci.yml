@@ -1,0 +1,36 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.3
+      - name: fmt
+        run: terraform fmt -check -recursive
+      - name: validate
+        run: |
+          for d in bootstrap envs/dev; do
+            (cd "$d" && terraform init -backend=false -input=false && terraform validate)
+          done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: security scan (checkov)
+        run: |
+          pip install checkov
+          checkov -d . --quiet --compact
+      - uses: terraform-linters/setup-tflint@v4
+      - name: tflint
+        run: |
+          tflint --init
+          tflint --recursive
