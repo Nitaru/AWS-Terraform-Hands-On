@@ -150,3 +150,7 @@ scripts/            verify.sh (9 checks), demo-selfheal.sh
 ## Versions
 
 Terraform 1.15, AWS provider 6.x, Ubuntu 24.04 LTS, Checkov 3.4.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
