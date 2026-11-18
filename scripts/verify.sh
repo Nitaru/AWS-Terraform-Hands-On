@@ -42,5 +42,10 @@ out=$(ssh "${SSH_OPTS[@]}" -o "ProxyCommand=$proxy" "ubuntu@$first_priv" 'hostna
 echo "$out" | grep -q 'passwordauthentication no' && ok "SSH via bastion works; password login is off" || bad "SSH via bastion: $out"
 echo "$out" | grep -q 'permitrootlogin no' && ok "root login is off on the private host" || bad "root login is not off"
 
+echo "Monitoring"
+alarms=$(aws cloudwatch describe-alarms --alarm-name-prefix tfdemo- --query 'length(MetricAlarms)' --output text)
+[ "$alarms" -ge 5 ] && ok "$alarms CloudWatch alarms exist" || bad "expected >= 5 CloudWatch alarms, found $alarms"
+aws cloudwatch get-dashboard --dashboard-name tfdemo-web >/dev/null 2>&1 && ok "dashboard tfdemo-web exists" || bad "dashboard tfdemo-web exists"
+
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

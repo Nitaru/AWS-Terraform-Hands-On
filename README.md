@@ -39,11 +39,12 @@ make bootstrap BUCKET=<globally-unique-name>   # one-time: S3 bucket for remote 
 make init      BUCKET=<same-name>
 make plan
 make apply
-make test                                      # 9 checks against the live stack
+make test                                      # 11 checks against the live stack
+make demo-alarm                                # break every web instance, watch the alarms fire and clear
 make destroy                                   # stop paying
 ```
 
-`make check` runs everything CI runs (`fmt`, `validate`, a Checkov security scan and 14 offline module tests) and needs no AWS account.
+`make check` runs everything CI runs (`fmt`, `validate`, a Checkov security scan and 17 offline module tests) and needs no AWS account.
 
 ## What it demonstrates
 
@@ -55,7 +56,8 @@ make destroy                                   # stop paying
 | **Bastion hardening** | SSH from one admin address only (the module refuses `0.0.0.0/0`), key-only login, no root login, fail2ban, IMDSv2. Same approach as my [Linux project](https://github.com/Nitaru/Linux-Hands-On). |
 | **Auto Scaling** | Launch template, rolling instance refresh (never below 50% healthy), CPU target tracking, ELB-based health checks. |
 | **Security baseline** | Encrypted volumes, IMDSv2 required, default security group emptied, VPC flow logs, invalid-header dropping on the ALB. |
-| **Policy as code** | Checkov in CI: 115 checks pass, 0 fail, 18 are skipped. Every skip has its reason written in the code next to the resource. |
+| **Policy as code** | Checkov in CI: 100 Terraform checks pass, 0 fail, 9 are skipped (plus 43 on the workflows). Every skip has its reason written in the code next to the resource. |
+| **Monitoring** | Five CloudWatch alarms (unhealthy targets, load balancer 5xx, instance 5xx, capacity below the minimum, high CPU) that all notify one SNS topic, and a four-panel dashboard. `make demo-alarm` proves they are wired to real metrics. See the alarm test below. |
 | **Honest testing** | [`scripts/verify.sh`](scripts/verify.sh) checks the stack from outside, and [`scripts/demo-selfheal.sh`](scripts/demo-selfheal.sh) kills an instance under load and measures what clients see. |
 
 ## Measured results
@@ -68,7 +70,7 @@ One real run in `eu-north-1`:
 | First `apply` | about 2.5 minutes before it failed (see below), 2 minutes for the retry |
 | Slowest resources | ALB 2m24s, NAT gateway 1m45s |
 | New instances passing ALB health checks | under a minute after launch |
-| `verify.sh` | 9 passed, 0 failed |
+| `verify.sh` | 11 passed, 0 failed (9 before the monitoring checks were added) |
 | `destroy` | 37 resources in 1m42s, then confirmed with the AWS API: 0 instances, NAT gateways, load balancers, Elastic IPs, VPCs or ASGs left |
 | Cost | the stack ran for roughly 30 minutes. At about $0.12 to $0.15 per hour (NAT gateway, ALB, public IPv4 addresses, three t3.micro), that is well under $1. This is an estimate from list prices, not a number from the bill. |
 
@@ -91,8 +93,31 @@ there is no claimed number. This is different from a planned rollout, where conn
 the rolling refresh keep traffic clean. My [Kubernetes project](https://github.com/Nitaru/Kubernetes-Hands-On)
 covers the planned-rollout case with measured zero failed requests.
 
+### Alarm test
+
+`make demo-alarm` stops nginx on every web instance while sending a request every half second, then watches the alarms until they
+have fired and cleared. One run on 2026-11-18:
+
+| What | Result |
+|---|---|
+| `tfdemo-unhealthy-hosts` went to ALARM | after **17 s** |
+| `tfdemo-elb-5xx` went to ALARM | after **43 s** |
+| Every alarm back to OK | after about **7.7 minutes**, once the Auto Scaling group had replaced the instances |
+| Requests that did not get a 200 | **283 of 647** during that outage |
+
+The two alarms that had to fire did. The other three (instance 5xx, capacity, CPU) stayed OK, which is also right: nginx was
+stopped, so no instance returned 5xx, the group kept its instances until their health checks failed, and CPU was idle. The test fails if
+a required alarm never fires or one does not return to OK. **Not covered:** the SNS topic has no subscriber, so nothing was actually
+delivered to a person, and one run is one run. My first attempt at this script was wrong in three ways (it needed bash 4,
+`ssh` swallowed the second instance's address from stdin, and an alarm left over from the bootstrap hid the start state); all fixed.
+
 ## Things that went wrong, and what they taught me
 
+- **On a fresh apply the first web instances can boot before the NAT route exists.** The Auto Scaling group was created 19 s into the apply, the NAT
+  gateway only after 1m55s, so the first two instances had no way out to install nginx. The console showed `Failed to run module scripts_user`, both
+  instances failed their health checks, and the group replaced them after about 4 and 6 minutes (the replacements were fine). `depends_on = [module.network]`
+  on the app and bastion modules fixes the order. Checked with a second fresh apply: the group history shows 0 terminations and both instances became
+  healthy on their own. One run each, and the cause is the best reading of the order and the failed script, not something I captured from the instance's own log.
 - **The first `apply` failed at the Auto Scaling Group** with "Access denied when attempting to assume
   role AWSServiceRoleForAutoScaling". On a new account AWS creates that service-linked role the first
   time Auto Scaling is used, and it had not propagated when the group launched. The role appeared a
@@ -158,7 +183,7 @@ envs/dev/           the environment: wires the modules together
 modules/network/    VPC, subnets, NAT, routes, flow logs
 modules/bastion/    hardened SSH entry point
 modules/app/        ALB, launch template, Auto Scaling Group, scaling policy
-scripts/            verify.sh (9 checks), demo-selfheal.sh
+scripts/            verify.sh (11 checks), demo-selfheal.sh, demo-alarm.sh
 .github/            CI: fmt, validate, Checkov, tflint
 ```
 

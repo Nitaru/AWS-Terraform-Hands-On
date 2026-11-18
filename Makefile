@@ -5,7 +5,7 @@ BUCKET ?=
 REGION ?= eu-north-1
 ENV    := envs/dev
 
-.PHONY: check fmt validate scan test-modules bootstrap init plan apply test destroy
+.PHONY: check fmt validate scan test-modules bootstrap init plan apply test demo-alarm destroy
 
 check: fmt validate scan test-modules   ## everything CI runs, no AWS needed
 
@@ -38,6 +38,9 @@ apply:
 
 test:
 	./scripts/verify.sh
+
+demo-alarm:        ## break every web instance and watch the alarms fire and clear (needs the stack up)
+	./scripts/demo-alarm.sh
 
 destroy:
 	cd $(ENV) && terraform destroy

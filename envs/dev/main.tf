@@ -37,6 +37,10 @@ module "network" {
 }
 
 module "bastion" {
+  # Wait for the whole network, including the NAT gateway and the routes to it. The instances install packages at boot,
+  # and without this the first ones can start before there is a route out and fail their health checks.
+  depends_on = [module.network]
+
   source     = "../../modules/bastion"
   name       = local.name
   vpc_id     = module.network.vpc_id
@@ -46,6 +50,11 @@ module "bastion" {
 }
 
 module "app" {
+  # Same reason as the bastion: the web instances install nginx at boot, so the private subnets need their route to the
+  # NAT gateway first. Observed on a fresh apply: the Auto Scaling group was created 19 s in, the NAT gateway only after
+  # 1m55s, and both first instances failed their health checks and were replaced.
+  depends_on = [module.network]
+
   source             = "../../modules/app"
   name               = local.name
   vpc_id             = module.network.vpc_id

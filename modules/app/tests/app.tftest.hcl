@@ -13,6 +13,11 @@ mock_provider "aws" {
       arn = "arn:aws:elasticloadbalancing:eu-north-1:123456789012:targetgroup/t-web/0123456789abcdef"
     }
   }
+  mock_resource "aws_sns_topic" {
+    defaults = {
+      arn = "arn:aws:sns:eu-north-1:123456789012:t-alarms"
+    }
+  }
   mock_resource "aws_launch_template" {
     defaults = {
       id             = "lt-0123456789abcdef0"
@@ -93,5 +98,50 @@ run "the_web_tier_scales_between_2_and_4_and_tracks_50_cpu" {
   assert {
     condition     = aws_autoscaling_policy.cpu.target_tracking_configuration[0].target_value == 50
     error_message = "the CPU target changed from 50%"
+  }
+}
+
+# Every alarm tells the same SNS topic, so subscribing one address is enough to hear about all of them.
+run "all_alarms_notify_the_shared_topic" {
+  command = apply
+
+  assert {
+    condition = alltrue([
+      for a in [
+        aws_cloudwatch_metric_alarm.unhealthy_hosts,
+        aws_cloudwatch_metric_alarm.elb_5xx,
+        aws_cloudwatch_metric_alarm.target_5xx,
+        aws_cloudwatch_metric_alarm.capacity,
+        aws_cloudwatch_metric_alarm.cpu_high,
+      ] : length(a.alarm_actions) == 1 && contains(a.alarm_actions, aws_sns_topic.alarms.arn)
+    ])
+    error_message = "an alarm does not notify the shared topic"
+  }
+}
+
+# The capacity alarm follows the group's minimum and treats "no data" as a problem.
+run "capacity_alarm_follows_the_minimum" {
+  command = apply
+
+  variables {
+    min_size = 3
+  }
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.capacity.threshold == 3 && aws_cloudwatch_metric_alarm.capacity.treat_missing_data == "breaching"
+    error_message = "the capacity alarm must use the group's minimum and treat missing data as breaching"
+  }
+}
+
+run "user_facing_error_alarms_use_the_expected_thresholds" {
+  command = apply
+
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.elb_5xx.metric_name == "HTTPCode_ELB_5XX_Count" && aws_cloudwatch_metric_alarm.elb_5xx.threshold == 5 && aws_cloudwatch_metric_alarm.elb_5xx.period == 60
+    error_message = "the load balancer 5xx alarm changed"
+  }
+  assert {
+    condition     = aws_cloudwatch_metric_alarm.unhealthy_hosts.metric_name == "UnHealthyHostCount" && aws_cloudwatch_metric_alarm.unhealthy_hosts.threshold == 0
+    error_message = "the unhealthy-host alarm changed"
   }
 }

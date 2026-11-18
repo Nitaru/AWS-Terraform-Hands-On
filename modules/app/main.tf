@@ -24,6 +24,8 @@ variable "max_size" {
   default = 4
 }
 
+data "aws_region" "current" {}
+
 data "aws_ssm_parameter" "ubuntu" {
   name = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id"
 }
@@ -199,6 +201,8 @@ resource "aws_autoscaling_group" "web" {
   target_group_arns         = [aws_lb_target_group.web.arn]
   health_check_type         = "ELB"
   health_check_grace_period = 180
+  # One-minute group metrics (free) so the capacity alarm below has data.
+  enabled_metrics = ["GroupInServiceInstances"]
 
   tag {
     key                 = "Name"
@@ -231,3 +235,161 @@ resource "aws_autoscaling_policy" "cpu" {
 
 output "alb_dns_name" { value = aws_lb.this.dns_name }
 output "web_security_group_id" { value = aws_security_group.web.id }
+
+# --- monitoring: alarms and a dashboard ----------------------------------------
+# Before this, the only monitoring was VPC flow logs. These alarms watch what users feel (5xx from the load balancer or
+# the instances), what the load balancer knows (unhealthy targets) and what the Auto Scaling group holds (capacity).
+
+resource "aws_sns_topic" "alarms" {
+  name              = "${var.name}-alarms"
+  kms_master_key_id = "alias/aws/sns"
+}
+
+locals {
+  lb_dimensions = {
+    LoadBalancer = aws_lb.this.arn_suffix
+    TargetGroup  = aws_lb_target_group.web.arn_suffix
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "unhealthy_hosts" {
+  alarm_name          = "${var.name}-unhealthy-hosts"
+  alarm_description   = "The load balancer sees at least one unhealthy web instance"
+  namespace           = "AWS/ApplicationELB"
+  metric_name         = "UnHealthyHostCount"
+  dimensions          = local.lb_dimensions
+  statistic           = "Maximum"
+  period              = 60
+  evaluation_periods  = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  ok_actions          = [aws_sns_topic.alarms.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "elb_5xx" {
+  alarm_name          = "${var.name}-elb-5xx"
+  alarm_description   = "The load balancer itself returned 5xx (for example no healthy target): users are seeing errors"
+  namespace           = "AWS/ApplicationELB"
+  metric_name         = "HTTPCode_ELB_5XX_Count"
+  dimensions          = { LoadBalancer = aws_lb.this.arn_suffix }
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 1
+  threshold           = 5
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  ok_actions          = [aws_sns_topic.alarms.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "target_5xx" {
+  alarm_name          = "${var.name}-target-5xx"
+  alarm_description   = "The web instances returned 5xx"
+  namespace           = "AWS/ApplicationELB"
+  metric_name         = "HTTPCode_Target_5XX_Count"
+  dimensions          = local.lb_dimensions
+  statistic           = "Sum"
+  period              = 60
+  evaluation_periods  = 2
+  threshold           = 5
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  ok_actions          = [aws_sns_topic.alarms.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "capacity" {
+  alarm_name          = "${var.name}-capacity-below-minimum"
+  alarm_description   = "Fewer web instances are in service than the minimum"
+  namespace           = "AWS/AutoScaling"
+  metric_name         = "GroupInServiceInstances"
+  dimensions          = { AutoScalingGroupName = aws_autoscaling_group.web.name }
+  statistic           = "Minimum"
+  period              = 60
+  evaluation_periods  = 2
+  threshold           = var.min_size
+  comparison_operator = "LessThanThreshold"
+  treat_missing_data  = "breaching" # no data from the group at all is also a problem
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  ok_actions          = [aws_sns_topic.alarms.arn]
+}
+
+resource "aws_cloudwatch_metric_alarm" "cpu_high" {
+  alarm_name          = "${var.name}-cpu-high"
+  alarm_description   = "Average CPU above 80% for 3 minutes: the group is not scaling out fast enough or has reached its maximum"
+  namespace           = "AWS/EC2"
+  metric_name         = "CPUUtilization"
+  dimensions          = { AutoScalingGroupName = aws_autoscaling_group.web.name }
+  statistic           = "Average"
+  period              = 60
+  evaluation_periods  = 3
+  threshold           = 80
+  comparison_operator = "GreaterThanThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.alarms.arn]
+  ok_actions          = [aws_sns_topic.alarms.arn]
+}
+
+resource "aws_cloudwatch_dashboard" "web" {
+  dashboard_name = "${var.name}-web"
+  dashboard_body = jsonencode({
+    widgets = [
+      {
+        type = "metric", x = 0, y = 0, width = 12, height = 6
+        properties = {
+          title  = "Requests and 5xx"
+          region = data.aws_region.current.region
+          stat   = "Sum"
+          period = 60
+          metrics = [
+            ["AWS/ApplicationELB", "RequestCount", "LoadBalancer", aws_lb.this.arn_suffix],
+            ["AWS/ApplicationELB", "HTTPCode_ELB_5XX_Count", "LoadBalancer", aws_lb.this.arn_suffix],
+            ["AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", aws_lb.this.arn_suffix, "TargetGroup", aws_lb_target_group.web.arn_suffix],
+          ]
+        }
+      },
+      {
+        type = "metric", x = 12, y = 0, width = 12, height = 6
+        properties = {
+          title  = "Healthy and unhealthy targets"
+          region = data.aws_region.current.region
+          stat   = "Maximum"
+          period = 60
+          metrics = [
+            ["AWS/ApplicationELB", "HealthyHostCount", "LoadBalancer", aws_lb.this.arn_suffix, "TargetGroup", aws_lb_target_group.web.arn_suffix],
+            ["AWS/ApplicationELB", "UnHealthyHostCount", "LoadBalancer", aws_lb.this.arn_suffix, "TargetGroup", aws_lb_target_group.web.arn_suffix],
+          ]
+        }
+      },
+      {
+        type = "metric", x = 0, y = 6, width = 12, height = 6
+        properties = {
+          title  = "Instances in service"
+          region = data.aws_region.current.region
+          stat   = "Minimum"
+          period = 60
+          metrics = [
+            ["AWS/AutoScaling", "GroupInServiceInstances", "AutoScalingGroupName", aws_autoscaling_group.web.name],
+          ]
+        }
+      },
+      {
+        type = "metric", x = 12, y = 6, width = 12, height = 6
+        properties = {
+          title  = "CPU and response time"
+          region = data.aws_region.current.region
+          period = 60
+          metrics = [
+            ["AWS/EC2", "CPUUtilization", "AutoScalingGroupName", aws_autoscaling_group.web.name, { stat = "Average" }],
+            ["AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", aws_lb.this.arn_suffix, { stat = "p95", yAxis = "right" }],
+          ]
+        }
+      },
+    ]
+  })
+}
+
+output "alarm_topic_arn" { value = aws_sns_topic.alarms.arn }
+output "dashboard_name" { value = aws_cloudwatch_dashboard.web.dashboard_name }
