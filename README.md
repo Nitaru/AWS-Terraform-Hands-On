@@ -43,7 +43,7 @@ make test                                      # 9 checks against the live stack
 make destroy                                   # stop paying
 ```
 
-`make check` runs everything CI runs (`fmt`, `validate`, a Checkov security scan) and needs no AWS account.
+`make check` runs everything CI runs (`fmt`, `validate`, a Checkov security scan and 14 offline module tests) and needs no AWS account.
 
 ## What it demonstrates
 
@@ -134,6 +134,21 @@ covers the planned-rollout case with measured zero failed requests.
 | Single NAT gateway | One per AZ |
 | Admin-wide credentials used for the demo | A scoped Terraform role, and GitHub Actions authenticating through OIDC to run `plan` on pull requests |
 | ALB deletion protection off | On, so the demo is the only exception |
+
+## Module tests
+
+`modules/*/tests/*.tftest.hcl` hold 14 `terraform test` checks, run by `make test-modules` and in CI. They use a mocked
+AWS provider, so they create nothing, cost nothing and need no credentials. They pin the properties that matter:
+the bastion's `admin_cidr` refuses `0.0.0.0/0` and anything that is not a CIDR, SSH to the web tier is allowed only from
+the bastion's security group, the web instances require IMDSv2 and encrypted gp3 disks, HTTP reaches them only from the
+load balancer, the health check is the one the recovery numbers below assume, and the NAT gateway and subnet layout
+are what the README describes.
+
+To check that they can fail, I broke four of those properties on purpose in a scratch copy (IMDSv2 off, SSH from a CIDR
+instead of the bastion group, the `0.0.0.0/0` validation removed, public IPs on launch) and each break turned the
+matching test red. **Not covered:** anything about how real AWS behaves. A mock accepts whatever the configuration says,
+so these tests catch a configuration someone weakened, not an AWS service that behaves differently. The nine live checks
+in `make test` exist for that.
 
 ## Layout
 

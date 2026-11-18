@@ -5,9 +5,9 @@ BUCKET ?=
 REGION ?= eu-north-1
 ENV    := envs/dev
 
-.PHONY: check fmt validate scan bootstrap init plan apply test destroy
+.PHONY: check fmt validate scan test-modules bootstrap init plan apply test destroy
 
-check: fmt validate scan   ## everything CI runs, no AWS needed
+check: fmt validate scan test-modules   ## everything CI runs, no AWS needed
 
 fmt:
 	terraform fmt -check -recursive
@@ -18,6 +18,9 @@ validate:
 
 scan:
 	checkov -d . --quiet --compact
+
+test-modules:      ## offline `terraform test` for each module, AWS provider mocked
+	for m in network bastion app; do (cd modules/$$m && terraform init -backend=false -input=false >/dev/null && terraform test) || exit 1; done
 
 bootstrap:
 	@test -n "$(BUCKET)" || (echo "set BUCKET=<globally unique name>"; exit 1)

@@ -6,3 +6,4 @@
 crash.log
 *.tfplan
 tfplan
+modules/*/.terraform.lock.hcl
