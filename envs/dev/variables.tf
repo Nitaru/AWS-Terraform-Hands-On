@@ -18,3 +18,15 @@ variable "enable_nat" {
   type        = bool
   default     = true
 }
+
+variable "health_check_interval" {
+  description = "Seconds between load balancer health checks (see docs/health-check-experiment.md)"
+  type        = number
+  default     = 10
+}
+
+variable "health_check_timeout" {
+  description = "Seconds to wait for one health check answer; must be below the interval"
+  type        = number
+  default     = 5
+}

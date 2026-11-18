@@ -55,11 +55,13 @@ module "app" {
   # 1m55s, and both first instances failed their health checks and were replaced.
   depends_on = [module.network]
 
-  source             = "../../modules/app"
-  name               = local.name
-  vpc_id             = module.network.vpc_id
-  public_subnet_ids  = module.network.public_subnet_ids
-  private_subnet_ids = module.network.private_subnet_ids
-  bastion_sg_id      = module.bastion.security_group_id
-  key_name           = module.bastion.key_name
+  source                = "../../modules/app"
+  name                  = local.name
+  vpc_id                = module.network.vpc_id
+  public_subnet_ids     = module.network.public_subnet_ids
+  private_subnet_ids    = module.network.private_subnet_ids
+  bastion_sg_id         = module.bastion.security_group_id
+  key_name              = module.bastion.key_name
+  health_check_interval = var.health_check_interval
+  health_check_timeout  = var.health_check_timeout
 }

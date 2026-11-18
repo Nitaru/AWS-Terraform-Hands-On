@@ -23,6 +23,16 @@ variable "max_size" {
   type    = number
   default = 4
 }
+variable "health_check_interval" {
+  description = "Seconds between load balancer health checks. Instances are taken out of rotation after two failures, so this sets how long traffic can still reach a dead one."
+  type        = number
+  default     = 10
+}
+variable "health_check_timeout" {
+  description = "Seconds to wait for one health check answer. Must be below the interval."
+  type        = number
+  default     = 5
+}
 
 data "aws_region" "current" {}
 
@@ -116,7 +126,8 @@ resource "aws_lb_target_group" "web" {
   health_check {
     path                = "/health"
     matcher             = "200"
-    interval            = 10
+    interval            = var.health_check_interval
+    timeout             = var.health_check_timeout
     healthy_threshold   = 2
     unhealthy_threshold = 2
   }
