@@ -226,6 +226,12 @@ resource "aws_autoscaling_group" "web" {
     version = aws_launch_template.web.latest_version
   }
 
+  # The scaling policy below changes the desired capacity at runtime. Without this, the next `terraform plan` wants to put it back to the
+  # minimum, undoing the autoscaler (measured: docs/health-check-experiment.md). Terraform still sets it once, when the group is created.
+  lifecycle {
+    ignore_changes = [desired_capacity]
+  }
+
   # Changing the template replaces instances gradually, never all at once.
   instance_refresh {
     strategy = "Rolling"

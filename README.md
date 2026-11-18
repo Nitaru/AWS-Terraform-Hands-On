@@ -86,10 +86,14 @@ and waits for the Auto Scaling Group to recover.
 | Requests that did not get a 200 | **11 (5.2%)** |
 | When they failed | between +2 s and +22 s after the kill: 502 first, then timeouts |
 
-So the stack heals itself, but it is **not zero-downtime for an abrupt instance loss**. Until the
-health check fails twice (10-second interval, 2 failures), the load balancer keeps sending some
-requests to a dead target. Shortening the interval would shrink that window; I did not test it, so
-there is no claimed number. This is different from a planned rollout, where connection draining and
+So the stack heals itself, but it is **not zero-downtime for an abrupt instance loss**. I first
+explained the failed requests as the load balancer sending traffic to a dead target until its health check
+has failed twice, and predicted that a 5 s interval would roughly halve them. **I tested that and it was wrong**
+([docs/health-check-experiment.md](docs/health-check-experiment.md)): at 10 s, 10 of 322 requests failed between +2 s and +16 s; at 5 s,
+10 of 395 failed between +2 s and +15 s. The same number, so the health check is not what limits it
+(the failures also stop at about 9 s, before two 10 s checks could even fail). I did not find the real cause; the likely one is
+the time between terminating an instance and the Auto Scaling group taking it out of the load balancer, which I did not measure.
+This is different from a planned rollout, where connection draining and
 the rolling refresh keep traffic clean. My [Kubernetes project](https://github.com/Nitaru/Kubernetes-Hands-On)
 covers the planned-rollout case with measured zero failed requests.
 
