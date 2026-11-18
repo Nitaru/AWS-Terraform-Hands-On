@@ -1,0 +1,18 @@
+# Keeps GitHub Actions, base images and dependencies current. Updates arrive as pull requests, so CI runs on each one.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: terraform
+    directories:
+      - "/bootstrap"
+      - "/envs/dev"
+      - "/modules/app"
+      - "/modules/bastion"
+      - "/modules/network"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
